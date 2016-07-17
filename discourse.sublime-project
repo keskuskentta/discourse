@@ -12,12 +12,11 @@
       "file_exclude_patterns": ["*.sqlite3"]
     },
     { "path": "lib" },
+    { "path": "plugins" },
     { "path": "script" },
-    { "path": "cookbooks" },
     { "path": "spec" },
-    { "path": "test",
-      "folder_exclude_patterns": ["fixtures"]
-    }
+    { "path": "vendor" },
+    { "path": "test" },
   ],
   "settings":
   {

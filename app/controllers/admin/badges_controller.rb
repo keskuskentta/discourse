@@ -5,6 +5,7 @@ class Admin::BadgesController < Admin::AdminController
       badge_types: BadgeType.all.order(:id).to_a,
       badge_groupings: BadgeGrouping.all.order(:position).to_a,
       badges: Badge.includes(:badge_grouping)
+                    .includes(:badge_type)
                     .references(:badge_grouping)
                     .order('badge_groupings.position, badge_type_id, badges.name').to_a,
       protected_system_fields: Badge.protected_system_fields,
@@ -18,6 +19,12 @@ class Admin::BadgesController < Admin::AdminController
                                       target_posts: params[:target_posts] == "true",
                                       explain: params[:explain] == "true",
                                       trigger: params[:trigger].to_i)
+  end
+
+  def new
+  end
+
+  def show
   end
 
   def badge_types
@@ -98,7 +105,7 @@ class Admin::BadgesController < Admin::AdminController
         begin
           BadgeGranter.contract_checks!(badge.query, { target_posts: badge.target_posts, trigger: badge.trigger })
         rescue => e
-          errors << [e.message]
+          errors << e.message
           raise ActiveRecord::Rollback
         end
 
@@ -106,10 +113,9 @@ class Admin::BadgesController < Admin::AdminController
         badge.save!
       end
 
-      if badge.errors
-        errors.push(*badge.errors.full_messages)
-      end
-
+      errors
+    rescue ActiveRecord::RecordInvalid
+      errors.push(*badge.errors.full_messages)
       errors
     end
 end

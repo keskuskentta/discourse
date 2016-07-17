@@ -12,28 +12,33 @@ class ExcerptParser < Nokogiri::XML::SAX::Document
     @strip_links = options[:strip_links] == true
     @text_entities = options[:text_entities] == true
     @markdown_images = options[:markdown_images] == true
+    @keep_newlines = options[:keep_newlines] == true
+    @keep_emoji_images = options[:keep_emoji_images] == true
     @start_excerpt = false
   end
 
   def self.get_excerpt(html, length, options)
     html ||= ''
-    if (html.include? 'excerpt') && (SPAN_REGEX === html)
-      length = html.length
-    end
+    length = html.length if html.include?('excerpt') && SPAN_REGEX === html
     me = self.new(length, options)
     parser = Nokogiri::HTML::SAX::Parser.new(me)
     catch(:done) do
       parser.parse(html)
     end
-    me.excerpt.strip!
-    me.excerpt
+    excerpt = me.excerpt.strip
+    excerpt = CGI.unescapeHTML(excerpt) if options[:text_entities] == true
+    excerpt
   end
 
   def escape_attribute(v)
-    v.gsub("&", "&amp;")
-     .gsub("\"", "&#34;")
-     .gsub("<", "&lt;")
-     .gsub(">", "&gt;")
+    return "" unless v
+
+    v = v.dup
+    v.gsub!("&", "&amp;")
+    v.gsub!("\"", "&#34;")
+    v.gsub!("<", "&lt;")
+    v.gsub!(">", "&gt;")
+    v
   end
 
   def include_tag(name, attributes)
@@ -43,17 +48,25 @@ class ExcerptParser < Nokogiri::XML::SAX::Document
   def start_element(name, attributes=[])
     case name
       when "img"
+        attributes = Hash[*attributes.flatten]
+
+        if attributes["class"] == 'emoji'
+          if @keep_emoji_images
+            return include_tag(name, attributes)
+          else
+            return characters(attributes["alt"])
+          end
+        end
 
         # If include_images is set, include the image in markdown
         characters("!") if @markdown_images
 
-        attributes = Hash[*attributes.flatten]
         if attributes["alt"]
           characters("[#{attributes["alt"]}]")
         elsif attributes["title"]
           characters("[#{attributes["title"]}]")
         else
-          characters("[image]")
+          characters("[#{I18n.t 'excerpt_image'}]")
         end
 
         characters("(#{attributes['src']})") if @markdown_images
@@ -89,7 +102,11 @@ class ExcerptParser < Nokogiri::XML::SAX::Document
         @in_a = false
       end
     when "p", "br"
-      characters(" ")
+      if @keep_newlines
+        characters("<br>", false, false, false)
+      else
+        characters(" ")
+      end
     when "aside"
       @in_quote = false
     when "div", "span"

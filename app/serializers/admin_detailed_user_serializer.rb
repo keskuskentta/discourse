@@ -15,15 +15,19 @@ class AdminDetailedUserSerializer < AdminUserSerializer
              :private_topics_count,
              :can_delete_all_posts,
              :can_be_deleted,
+             :can_be_anonymized,
              :suspend_reason,
              :primary_group_id,
              :badge_count,
-             :warnings_received_count
+             :warnings_received_count,
+             :user_fields,
+             :bounce_score,
+             :reset_bounce_score_after
 
   has_one :approved_by, serializer: BasicUserSerializer, embed: :objects
   has_one :api_key, serializer: ApiKeySerializer, embed: :objects
   has_one :suspended_by, serializer: BasicUserSerializer, embed: :objects
-  has_one :leader_requirements, serializer: TrustLevel3RequirementsSerializer, embed: :objects
+  has_one :tl3_requirements, serializer: TrustLevel3RequirementsSerializer, embed: :objects
   has_many :groups, embed: :object, serializer: BasicGroupSerializer
 
   def can_revoke_admin
@@ -50,8 +54,8 @@ class AdminDetailedUserSerializer < AdminUserSerializer
     scope.can_delete_user?(object)
   end
 
-  def moderator
-    object.moderator
+  def can_be_anonymized
+    scope.can_anonymize_user?(object)
   end
 
   def topic_count
@@ -59,19 +63,27 @@ class AdminDetailedUserSerializer < AdminUserSerializer
   end
 
   def include_api_key?
-    api_key.present?
+    scope.is_admin? && api_key.present?
   end
 
   def suspended_by
     object.suspend_record.try(:acting_user)
   end
 
-  def leader_requirements
-    object.leader_requirements
+  def include_tl3_requirements?
+    object.has_trust_level?(TrustLevel[2])
   end
 
-  def include_leader_requirements?
-    object.has_trust_level?(TrustLevel[2])
+  def include_user_fields?
+    object.user_fields.present?
+  end
+
+  def bounce_score
+    object.user_stat.bounce_score
+  end
+
+  def reset_bounce_score_after
+    object.user_stat.reset_bounce_score_after
   end
 
 end

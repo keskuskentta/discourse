@@ -1,51 +1,98 @@
-import ObjectController from 'discourse/controllers/object';
+import CanCheckEmails from 'discourse/mixins/can-check-emails';
+import computed from 'ember-addons/ember-computed-decorators';
+import UserAction from 'discourse/models/user-action';
+import User from 'discourse/models/user';
 
-export default ObjectController.extend({
+export default Ember.Controller.extend(CanCheckEmails, {
+  indexStream: false,
+  userActionType: null,
+  needs: ['application','user-notifications', 'user-topics-list'],
+  currentPath: Em.computed.alias('controllers.application.currentPath'),
 
-  viewingSelf: function() {
-    return this.get('content.username') === Discourse.User.currentProp('username');
-  }.property('content.username'),
+  @computed("content.username")
+  viewingSelf(username) {
+    return username === User.currentProp('username');
+  },
 
-  collapsedInfo: Em.computed.not('indexStream'),
+  @computed('indexStream', 'viewingSelf', 'forceExpand')
+  collapsedInfo(indexStream, viewingSelf, forceExpand){
+    return (!indexStream || viewingSelf) && !forceExpand;
+  },
 
-  showEmailOnProfile: Discourse.computed.setting('show_email_on_profile'),
+  linkWebsite: Em.computed.not('model.isBasic'),
 
-  showEmail: Ember.computed.and('email', 'showEmailOnProfile'),
+  @computed("model.trust_level")
+  removeNoFollow(trustLevel) {
+    return trustLevel > 2 && !this.siteSettings.tl3_links_no_follow;
+  },
 
-  websiteName: function() {
-    var website = this.get('website');
-    if (Em.isEmpty(website)) { return; }
-    return this.get('website').split("/")[2];
-  }.property('website'),
+  @computed('viewingSelf', 'currentUser.admin')
+  showBookmarks(viewingSelf, isAdmin) {
+    return viewingSelf || isAdmin;
+  },
 
-  linkWebsite: Em.computed.not('isBasic'),
+  @computed('viewingSelf', 'currentUser.admin')
+  showPrivateMessages(viewingSelf, isAdmin) {
+    return this.siteSettings.enable_private_messages && (viewingSelf || isAdmin);
+  },
 
-  canSeePrivateMessages: function() {
-    return this.get('viewingSelf') || Discourse.User.currentProp('admin');
-  }.property('viewingSelf'),
+  @computed('viewingSelf', 'currentUser.staff')
+  showNotificationsTab(viewingSelf, staff) {
+    return viewingSelf || staff;
+  },
 
-  canSeeNotificationHistory: Em.computed.alias('canSeePrivateMessages'),
+  @computed('model.name')
+  nameFirst(name) {
+    return !this.get('siteSettings.prioritize_username_in_ux') && name && name.trim().length > 0;
+  },
 
-  showBadges: function() {
-    return Discourse.SiteSettings.enable_badges && (this.get('content.badge_count') > 0);
-  }.property('content.badge_count'),
+  @computed("model.badge_count")
+  showBadges(badgeCount) {
+    return Discourse.SiteSettings.enable_badges && badgeCount > 0;
+  },
 
-  privateMessageView: function() {
-    return (this.get('userActionType') === Discourse.UserAction.TYPES.messages_sent) ||
-           (this.get('userActionType') === Discourse.UserAction.TYPES.messages_received);
-  }.property('userActionType'),
+  @computed("userActionType")
+  privateMessageView(userActionType) {
+    return (userActionType === UserAction.TYPES.messages_sent) ||
+           (userActionType === UserAction.TYPES.messages_received);
+  },
 
-  /**
-    Can the currently logged in user invite users to the site
+  @computed("indexStream", "userActionType")
+  showActionTypeSummary(indexStream,userActionType, showPMs) {
+    return (indexStream || userActionType) && !showPMs;
+  },
 
-    @property canInviteToForum
-  **/
-  canInviteToForum: function() {
-    return Discourse.User.currentProp('can_invite_to_forum');
-  }.property(),
 
-  privateMessagesActive: Em.computed.equal('pmView', 'index'),
-  privateMessagesMineActive: Em.computed.equal('pmView', 'mine'),
-  privateMessagesUnreadActive: Em.computed.equal('pmView', 'unread')
+  @computed()
+  canInviteToForum() {
+    return User.currentProp('can_invite_to_forum');
+  },
 
+  canDeleteUser: Ember.computed.and("model.can_be_deleted", "model.can_delete_all_posts"),
+
+  @computed('model.user_fields.@each.value')
+  publicUserFields() {
+    const siteUserFields = this.site.get('user_fields');
+    if (!Ember.isEmpty(siteUserFields)) {
+      const userFields = this.get('model.user_fields');
+      return siteUserFields.filterProperty('show_on_profile', true).sortBy('position').map(field => {
+        field.dasherized_name = field.get('name').dasherize();
+        const value = userFields ? userFields[field.get('id').toString()] : null;
+        return Ember.isEmpty(value) ? null : Ember.Object.create({ value, field });
+      }).compact();
+    }
+  },
+
+  actions: {
+    expandProfile() {
+      this.set('forceExpand', true);
+    },
+
+    adminDelete() {
+      // I really want this deferred, don't want to bring in all this code till used
+      const AdminUser = require('admin/models/admin-user').default;
+      AdminUser.find(this.get('model.id')).then(user => user.destroy({deletePosts: true}));
+    },
+
+  }
 });

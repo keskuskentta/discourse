@@ -25,7 +25,6 @@ class SuggestedTopicsBuilder
     if @category_id && SiteSetting.limit_suggested_to_category?
       results = results.where(category_id: @category_id)
     end
-
     results = results.to_a.reject { |topic| @category_topic_ids.include?(topic.id) }
 
     unless results.empty?
@@ -68,14 +67,6 @@ class SuggestedTopicsBuilder
 
   def category_results_left
     SiteSetting.suggested_topics - @results.count{|r| r.category_id == @category_id}
-  end
-
-  def category_full?
-    if @category_id
-
-    else
-      full?
-    end
   end
 
   def size

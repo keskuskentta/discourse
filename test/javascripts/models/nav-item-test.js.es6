@@ -1,15 +1,9 @@
-var asianCategory = Discourse.Category.create({name: '确实是这样', id: 343434});
 
 module("Discourse.NavItem", {
   setup: function() {
     Ember.run(function() {
+      const asianCategory = Discourse.Category.create({name: '确实是这样', id: 343434});
       Discourse.Site.currentProp('categories').addObject(asianCategory);
-    });
-  },
-
-  teardown: function() {
-    Em.run(function() {
-      Discourse.Site.currentProp('categories').removeObject(asianCategory);
     });
   }
 });
@@ -23,6 +17,6 @@ test('href', function(){
 
   href('latest', '/latest', 'latest');
   href('categories', '/categories', 'categories');
-  href('category/bug', '/category/bug', 'English category name');
-  href('category/确实是这样', '/category/343434-category', 'Chinese category name');
+  href('category/bug', '/c/bug', 'English category name');
+  href('category/确实是这样', '/c/343434-category', 'Chinese category name');
 });

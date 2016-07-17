@@ -56,6 +56,10 @@
     }
   }
 
+  .delete-account {
+    overflow: hidden;
+  }
+
   .checkbox-label {
     overflow: auto;
     display: block;
@@ -63,129 +67,272 @@
     padding: 5px 8px;
   }
 
-  .bio-composer #wmd-quote-post {
-    display: none;
+  textarea {width: 100%;}
+}
+
+.profile-image {
+  height: 25px;
+  width: 100%;
+}
+
+
+.groups {
+  .group-link {
+    color: $tertiary;
   }
 }
 
-#about-me {
-  padding: 4px;
-  margin: -4px;
-  display: block;
-  width: 220px;
-  min-height: 200px;
-  background-color: scale-color-diff();
-  color: $primary;
-  word-wrap: break-word;
+.hasBackground .details {margin-top: 200px;
+}
+
+.user-preferences {
+  input.category-group {
+  }
+
+  textarea {
+    height: 100px;
+  }
+
+  input[type=text] {
+    @include small-width {
+    }
+  }
+
+  .static {
+    color: $primary;
+    display: inline-block;
+  }
+  .instructions {
+    color: dark-light-choose(scale-color($primary, $lightness: 50%), scale-color($secondary, $lightness: 50%));
+    margin-top: 5px;
+    margin-bottom: 10px;
+    font-size: 80%;
+    line-height: 1.4em;
+  }
+  .avatar {
+    margin-left: 3px;
+  }
+  .instructions a[href] {
+    color: $tertiary;
+  }
+  .warning {
+    background-color: scale-color($danger, $lightness: 30%);
+    padding: 5px 8px;
+    color: $secondary;
+  }
+
+}
+
+.form-horizontal .control-group.other {
+  margin-bottom: 0;
+}
+
+.form-horizontal .control-group.category {
+  margin-top: 18px;
 }
 
 .user-navigation {
+  width: 100%;
+  margin-top: 20px;
+  min-height: 20px;
 
   h3 {
-    color: scale-color($primary, $lightness: 50%);
-    padding-left: 5px;
-  }
-  .nav-stacked {
-    border-left: 0;
-    border-right: 0;
+    color: $primary;
+    margin: 10px;
   }
 
 }
 
 .user-main {
-  clear: both;
-  margin-bottom: 50px;
+
+  table.group-members {
+    width: 100%;
+    p {
+      max-width: 600px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    th {
+      padding: 0.5em;
+      text-align: right;
+      border-bottom: 1px solid dark-light-diff($primary, $secondary, 90%, -60%);
+    }
+    td {
+      padding: 0.5em;
+      border-bottom: 1px solid dark-light-diff($primary, $secondary, 90%, -60%);
+      img {
+        margin-right: 10px;
+      }
+      span.text {
+        float: right;
+        color: $primary;
+      }
+    }
+    .user-info {
+      width: 245px;
+    }
+  }
+
+  .user-content {
+    background-color: $secondary;
+    box-sizing: border-box;
+    margin-top: 10px;
+
+    .btn.right {
+      float: right
+    }
+
+    h2 {
+      margin-bottom: 10px;
+    }
+
+    table {
+      width: 100%;
+      margin-top: 10px;
+
+      th {
+        text-align: left;
+        border-bottom: 1px solid dark-light-diff($primary, $secondary, 90%, -60%);
+        padding: 5px;
+      }
+
+      td {
+        padding: 5px;
+        border-bottom: 1px solid dark-light-diff($primary, $secondary, 90%, -60%);
+      }
+    }
+  }
 
   .about {
-    background-color: scale-color-diff();
-    background-position: center center;
-    background-size: cover;
+    background: dark-light-diff($primary, $secondary, 0%, -75%) center;
+    width: 100%;
     margin-bottom: 10px;
     overflow: hidden;
-    color: $primary;
+    color: $secondary;
+
+  .secondary {
+    background: dark-light-diff($primary, $secondary, 90%, -65%);
+    font-size: 0.929em;
+      .btn { padding: 3px 12px; }
+
+      dl dd {
+        margin: 0 15px 0 5px;
+        padding: 0;
+      }
+
+      dl dt {
+        display: inline-block;
+      }
+
+      dl {
+        padding: 10px 15px;
+        margin: 0;
+      }
+
+      dd {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: $primary;
+      }
+
+      dt {
+        color: dark-light-diff($secondary, $primary, 50%, -40%);
+        margin: 0;
+      }
+    }
 
     .details {
-      text-align: center;
-      padding: 10px;
+      padding: 15px 10px 4px 10px;
+      background: rgba($secondary, .85);
+
+      blockquote {
+        background-color: dark-light-diff($secondary, $primary, 30%, -70%);
+        border-left-color: dark-light-diff($secondary, $primary, 50%, -50%);
+      }
 
       h1 {
-        font-size: 30px;
+        font-size: 2.143em;
         font-weight: normal;
+        margin: 10px 0 0 0;
       }
 
       h2 {
-        font-size: 20px;
-        margin-bottom: 6px;
+        font-size: 1.214em;
         font-weight: normal;
+        margin-top: 10px;
         max-width: 100%;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
 
-      a[href] {
-        color: $primary;
+      h3 {
+        font-weight: normal;
+        font-size: 1em;
+        margin: 5px 0;
+        i:not(:first-of-type) {
+          margin-left: 10px;
+        }
       }
 
+      .groups {
+        margin-left: 10px;
+        display: inline;
+        }
+
       img.avatar {
-        border: 3px solid scale-color-diff();
-        margin-bottom: 4px;
+        float: left;
+      }
+
+      .suspended {
+        color: $danger;
       }
 
       .primary {
-        color: $secondary;
-        text-shadow: rgba(0, 0, 0, 0.5) 0 1px 1px;
-        max-height: 800px;
-        overflow: auto;
+        width: 100%;
+        position: relative;
+        float: left;
+        color: $primary;
 
-        a[href] {
-          color: $secondary;
-          text-decoration: underline;
-          text-shadow: rgba(0, 0, 0, 0.5) 0 1px 1px;
-        }
-
-        img {
-          max-width: 100%;
-        }
+        h1 {font-weight: bold;}
 
         .primary-textual {
-          width: 90%;
-          margin: 0 auto;
-          padding: 4px;
-
-          h1, h2 {
-            margin: 7px;
+          float: left;
+          padding-left: 15px;
+          a[href] {
+            color: $primary;
           }
         }
-      }
 
-      .secondary {
-        background-color: $primary;
-        text-align: left;
-        padding: 1px 10px;
+        .bio {
+          color: $primary;
+          max-height: 300px;
+          overflow: auto;
+          max-width: 700px;
 
-        dd {
-          color: $secondary;
-          margin: 0 0 7px 0;
-          a {
-            color: inherit;
+          a[href] {
+            text-decoration: underline;
           }
-        }
-        dt {
-          color: scale-color($primary, $lightness: 75%);
-          margin: 0;
+
+          img {
+            max-width: 100%;
+          }
         }
       }
     }
 
     .controls {
-      background-color: scale-color($primary, $lightness: 75%);
-      margin-top: 0;
-      padding: 10px 10px 0 10px;
-
-      .btn {
+      float: left;
+      padding-left: 15px;
+      ul {
+        list-style-type: none;
+        margin: 0;
+      }
+      a {
+        padding: 5px 10px;
+        width: 120px;
         margin-bottom: 10px;
-        float: none;
       }
     }
   }
@@ -193,130 +340,184 @@
   .about.collapsed-info {
     .controls {
       margin-top: 0;
+
+    }
+
+    .staff-counters {
+      display: none;
+    }
+    .secondary { display: none; }
+
+    .profile-image {
+      height: 0;
     }
 
     .details {
-      .secondary { display: none; }
+      padding: 12px 15px 2px 15px;
+      margin-top: 0;
+      background: rgba($secondary, .85);
       .bio { display: none; }
 
       .primary {
-        width: 100%;
         text-align: left;
-        margin-top: 4px;
+        margin-top: 0;
+        width: 100%;
 
         .avatar {
           float: left;
           margin-right: 10px;
-          border: 2px solid $tertiary;
           width: 45px;
           height: 45px;
         }
 
         h1 {
-          margin:0;
-          font-size: 20px;
-          line-height: 22px;
+          font-size: 1.429em;
         }
 
         h2 {
-          font-size: 17px;
-          line-height: 16px;
+          font-size: 1.071em;
           margin-top: 4px;
+        }
+
+        h3 {
+          display: none;
         }
       }
     }
   }
 
+
   .user-stream {
     .excerpt {
       margin: 5px 0;
-      font-size: 13px;
+      font-size: 0.929em;
       word-wrap: break-word;
-      color: scale-color($primary, $lightness: 50%);
+      color: $primary;
     }
     .item.moderator-action {
-      background-color:  scale-color($highlight, $lightness: 50%);
+      background-color: dark-light-diff($highlight, $secondary, 50%, -10%);
     }
     .item.deleted {
       opacity: 0.8;
-      background-color: scale-color($danger, $lightness: 50%);
+      background-color: dark-light-diff(rgba($danger,.7), $secondary, 50%, -10%);
     }
     .item.hidden {
       display: block;
       opacity: 0.4;
     }
     .item {
-      padding: 10px 8px;
+      padding: 20px 0 15px 0;
       background-color: $secondary;
-      border-bottom: 1px solid scale-color-diff();
+      border-bottom: 1px solid dark-light-diff($primary, $secondary, 90%, -60%);
     }
     .type {
-      color: scale-color($primary, $lightness: 50%);
+      color: $primary;
     }
     span.name {
-      color: scale-color($primary, $lightness: 50%);
+      color: $primary;
     }
     .time, .delete-info {
       display: block;
       float: right;
-      color: $primary;
-      margin-right: 8px;
+      color: lighten($primary, 40%);
       font-size: 11px;
     }
     .delete-info i {
-      font-size: 14px;
+      font-size: 1em;
     }
     .avatar-link {
       float: left;
-      margin-right: 10px;
+      margin-right: 4px;
     }
     .title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       display: block;
-      margin-bottom: 4px;
-      font-size: 14px;
+    }
+    .name {
+      font-size: 1em;
+      max-width: 400px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: middle;
     }
     .edit-reason {
-      background-color: scale-color($highlight, $lightness: 50%);
+      background-color: scale-color($highlight, $lightness: 25%);
       padding: 3px 5px 5px 5px;
     }
     .remove-bookmark {
-      float: right !important;
-      margin-top: -8px;
+      float: right;
+      margin-top: -4px;
     }
     .notification {
-      padding: 0 8px;
+      &.unread {
+        background-color: dark-light-choose(scale-color($tertiary, $lightness: 85%), srgb-scale($tertiary, $secondary, 15%));
+      }
+
       li { display: inline-block; }
       p {
         display: inline-block;
-        margin: 7px;
+        margin-left: 10px;
         span {
           color: $primary;
         }
       }
       .time {
         display: inline-block;
-        margin: 0;
+        margin-left: 10px;
         float: none;
       }
       // common/base/header.scss
       .fa, .icon {
-        color: scale-color($primary, $lightness: 50%);
+        color: dark-light-choose(scale-color($primary, $lightness: 50%), scale-color($secondary, $lightness: 50%));
+        font-size: 1.714em;
       }
+    }
+    .group-member-info {
+      .name {
+        display: inline-block;
+        margin-top: 5px;
+        color: dark-light-choose(scale-color($primary, $lightness: 50%), scale-color($secondary, $lightness: 50%));
+        vertical-align: inherit;
+      }
+      .title {
+        display: inline-block;
+        margin-top: 5px;
+        color: dark-light-choose(scale-color($primary, $lightness: 50%), scale-color($secondary, $lightness: 50%));
+      }
+    }
+    .topic-statuses {
+      float: left;
     }
   }
 
   .staff-counters {
-    text-align: center;
-    div {
-      padding: 2px 8px;
-      margin-bottom: 10px;
+    text-align: left;
+    background: $primary;
+    padding: 7px 0;
+    display: inline;
+    > div {
+      margin: 0 10px 0 0;
       display: inline-block;
+      padding: 5px 0;
+      &:first-of-type {
+        padding-left: 10px;
+        }
+      span {
+        padding: 1px 5px;
+        border-radius: 10px;
+        }
+
     }
-    a.active {
+    a {
+      color: $secondary;
+    }
+    .active {
       font-weight: bold;
     }
   }
-
   .pill {
     border-radius: 15px;
     display: inline-block;
@@ -332,6 +533,9 @@
   .flagged-posts {
     background-color: #E49735;
   }
+  .warnings-received {
+    background-color: #EC441B;
+  }
   .deleted-posts {
     background-color: #EC441B;
   }
@@ -339,12 +543,79 @@
     background-color: #c22020;
   }
 
-  div#pagedown-editor {
-    width: 100%;
+  .user-field.text {
+    padding-top: 18px;
   }
 
-  textarea#wmd-input {
-    width: 100%;
+  .user-field {
+    label {
+      width: 140px;
+      float: left;
+      text-align: right;
+      font-weight: bold;
+    }
+    input[type=text] {
+      width: 530px;
+    }
+    .controls {
+      label {
+        width: auto;
+        text-align: left;
+        font-weight: normal;
+        float: auto;
+      }
+      p {
+        color: dark-light-choose(scale-color($primary, $lightness: 50%), scale-color($secondary, $lightness: 50%));
+        margin-top: 5px;
+        margin-bottom: 10px;
+        font-size: 80%;
+        line-height: 1.4em;
+      }
+    }
+    clear: both;
+    margin-bottom: 10px;
   }
+}
 
+.paginated-topics-list {
+  margin-top: 20px;
+
+  .user-content {
+      width: 100%;
+      margin-top: 0;
+    }
+}
+
+.user-archive {
+  display: inline-block;
+}
+
+// mobile fixups for badges
+
+.badge-card.medium {
+  width: 300px;
+}
+
+.show-badge-details {
+  margin-bottom: 1em;
+}
+
+.user-badges {
+  margin-bottom: 2em;
+}
+
+.show-badge-details .badge-grant-info {
+  display: none;
+}
+
+.user-info.medium {
+  width: 300px;
+}
+
+.user-info.medium .user-detail {
+  width: 240px;
+}
+
+.user-info.medium .user-image {
+  width: auto;
 }

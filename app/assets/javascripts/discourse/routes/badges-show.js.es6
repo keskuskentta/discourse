@@ -1,24 +1,49 @@
-export default Ember.Route.extend({
-  serialize: function(model) {
-    return {id: model.get('id'), slug: model.get('name').replace(/[^A-Za-z0-9_]+/g, '-').toLowerCase()};
-  },
+import UserBadge from 'discourse/models/user-badge';
+import Badge from 'discourse/models/badge';
+import PreloadStore from 'preload-store';
 
-  model: function(params) {
-    if (PreloadStore.get('badge')) {
-      return PreloadStore.getAndRemove('badge').then(function(json) {
-        return Discourse.Badge.createFromJson(json);
-      });
-    } else {
-      return Discourse.Badge.findById(params.id);
+export default Discourse.Route.extend({
+  queryParams: {
+    username: {
+      refreshModel: true
+    }
+  },
+  actions: {
+    didTransition() {
+      this.controllerFor("badges/show")._showFooter();
+      return true;
     }
   },
 
-  setupController: function(controller, model) {
-    Discourse.UserBadge.findByBadgeId(model.get('id')).then(function(userBadges) {
-      controller.set('userBadges', userBadges);
-      controller.set('userBadgesLoaded', true);
+  serialize(model) {
+    return model.getProperties('id', 'slug');
+  },
+
+  model(params) {
+    if (PreloadStore.get("badge")) {
+      return PreloadStore.getAndRemove("badge").then(json => Badge.createFromJson(json));
+    } else {
+      return Badge.findById(params.id);
+    }
+  },
+
+  afterModel(model, transition) {
+    const username = transition.queryParams && transition.queryParams.username;
+
+    return UserBadge.findByBadgeId(model.get("id"), {username}).then(userBadges => {
+      this.userBadges = userBadges;
     });
-    controller.set('model', model);
-    Discourse.set('title', model.get('displayName'));
+  },
+
+  titleToken() {
+    const model = this.modelFor("badges.show");
+    if (model) {
+      return model.get("name");
+    }
+  },
+
+  setupController(controller, model) {
+    controller.set("model", model);
+    controller.set("userBadges", this.userBadges);
   }
 });

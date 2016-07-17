@@ -1,28 +1,30 @@
+import { ajax } from 'discourse/lib/ajax';
+import { default as computed, observes } from 'ember-addons/ember-computed-decorators';
 
 export default Ember.ArrayController.extend({
-  canLoadMore: true,
-  loading: false,
+  needs: ['application'],
+
+  @observes('model.canLoadMore')
+  _showFooter() {
+    this.set("controllers.application.showFooter", !this.get("model.canLoadMore"));
+  },
+
+  @computed('model.content.length')
+  hasNotifications(length) {
+    return length > 0;
+  },
+
+  currentPath: Em.computed.alias('controllers.application.currentPath'),
 
   actions: {
-    loadMore: function() {
-      if (this.get('canLoadMore') && !this.get('loading')) {
-        this.set('loading', true);
-        var self = this;
-        Discourse.NotificationContainer.loadHistory(
-            self.get('model.lastObject.created_at'),
-            self.get('user.username')).then(function(result) {
-          self.set('loading', false);
-          var notifications = result.get('content');
-          self.pushObjects(notifications);
-          // Stop trying if it's the end
-          if (notifications && notifications.length === 0) {
-            self.set('canLoadMore', false);
-          }
-        }).catch(function(error) {
-          self.set('loading', false);
-          Em.Logger.error(error);
-        });
-      }
+    resetNew() {
+      ajax('/notifications/mark-read', { method: 'PUT' }).then(() => {
+        this.setEach('read', true);
+      });
+    },
+
+    loadMore() {
+      this.get('model').loadMore();
     }
   }
 });

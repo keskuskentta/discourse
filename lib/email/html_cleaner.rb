@@ -7,9 +7,10 @@ module Email
     # Elements to hoist all children out of
     HTML_HOIST_ELEMENTS = %w(div span font table tbody th tr td)
     # Node types to always delete
-    HTML_DELETE_ELEMENT_TYPES = [Nokogiri::XML::Node::DTD_NODE,
-                                 Nokogiri::XML::Node::COMMENT_NODE,
-                                 ]
+    HTML_DELETE_ELEMENT_TYPES = [
+      Nokogiri::XML::Node::DTD_NODE,
+      Nokogiri::XML::Node::COMMENT_NODE,
+    ]
 
     # Private variables:
     #   @doc - nokogiri document
@@ -76,7 +77,7 @@ module Email
     def add_newlines(doc)
       # Replace <br> tags with a markdown \n
       doc.xpath('//br').each do |br|
-        br.replace(new_linebreak_node doc)
+        br.replace(new_linebreak_node doc, 2)
       end
       # Surround <p> tags with newlines, to help with line-wise postprocessing
       # and ensure markdown paragraphs

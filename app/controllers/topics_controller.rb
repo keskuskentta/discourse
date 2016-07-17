@@ -2,10 +2,9 @@ require_dependency 'topic_view'
 require_dependency 'promotion'
 require_dependency 'url_helper'
 require_dependency 'topics_bulk_action'
+require_dependency 'discourse_event'
 
 class TopicsController < ApplicationController
-  include UrlHelper
-
   before_filter :ensure_logged_in, only: [:timings,
                                           :destroy_timings,
                                           :update,
@@ -24,11 +23,16 @@ class TopicsController < ApplicationController
                                           :autoclose,
                                           :bulk,
                                           :reset_new,
-                                          :change_post_owners]
+                                          :change_post_owners,
+                                          :change_timestamps,
+                                          :archive_message,
+                                          :move_to_inbox,
+                                          :convert_topic,
+                                          :bookmark]
 
   before_filter :consider_user_for_promotion, only: :show
 
-  skip_before_filter :check_xhr, only: [:show, :feed]
+  skip_before_filter :check_xhr, only: [:show, :unsubscribe, :feed]
 
   def id_for_slug
     topic = Topic.find_by(slug: params[:slug].downcase)
@@ -38,33 +42,49 @@ class TopicsController < ApplicationController
   end
 
   def show
-    flash["referer"] ||= request.referer
+    if request.referer
+      flash["referer"] ||= request.referer[0..255]
+    end
 
     # We'd like to migrate the wordpress feed to another url. This keeps up backwards compatibility with
     # existing installs.
     return wordpress if params[:best].present?
 
+    # work around people somehow sending in arrays,
+    # arrays are not supported
+    params[:page] = params[:page].to_i rescue 1
+
     opts = params.slice(:username_filters, :filter, :page, :post_number, :show_deleted)
     username_filters = opts[:username_filters]
 
+    opts[:slow_platform] = true if slow_platform?
     opts[:username_filters] = username_filters.split(',') if username_filters.is_a?(String)
 
     begin
       @topic_view = TopicView.new(params[:id] || params[:topic_id], current_user, opts)
     rescue Discourse::NotFound
-      topic = Topic.find_by(slug: params[:id].downcase) if params[:id]
-      raise Discourse::NotFound unless topic
-      redirect_to_correct_topic(topic, opts[:post_number]) && return
+      if params[:id]
+        topic = Topic.find_by(slug: params[:id].downcase)
+        return redirect_to_correct_topic(topic, opts[:post_number]) if topic && topic.visible
+      end
+      raise Discourse::NotFound
     end
 
-    page = params[:page].to_i
-    if (page < 0) || ((page - 1) * SiteSetting.posts_per_page > @topic_view.topic.highest_post_number)
+    page = params[:page]
+    if (page < 0) || ((page - 1) * @topic_view.chunk_size > @topic_view.topic.highest_post_number)
       raise Discourse::NotFound
     end
 
     discourse_expires_in 1.minute
 
-    redirect_to_correct_topic(@topic_view.topic, opts[:post_number]) && return if slugs_do_not_match || (!request.format.json? && params[:slug].nil?)
+    if !@topic_view.topic.visible && @topic_view.topic.slug != params[:slug] && !request.format.json?
+      raise Discourse::NotFound
+    end
+
+    if slugs_do_not_match || (!request.format.json? && params[:slug].nil?)
+      redirect_to_correct_topic(@topic_view.topic, opts[:post_number])
+      return
+    end
 
     track_visit_to_topic
 
@@ -72,9 +92,14 @@ class TopicsController < ApplicationController
       @topic_view.draft = Draft.get(current_user, @topic_view.draft_key, @topic_view.draft_sequence)
     end
 
+    unless @topic_view.topic.visible
+      response.headers['X-Robots-Tag'] = 'noindex'
+    end
+
+    canonical_url UrlHelper.absolute_without_cdn(@topic_view.canonical_path)
+
     perform_show_response
 
-    canonical_url absolute_without_cdn(@topic_view.canonical_path)
   rescue Discourse::InvalidAccess => ex
 
     if current_user
@@ -82,7 +107,37 @@ class TopicsController < ApplicationController
       Notification.remove_for(current_user.id, params[:topic_id])
     end
 
+    if ex.obj && Topic === ex.obj && guardian.can_see_topic_if_not_deleted?(ex.obj)
+      rescue_discourse_actions(:not_found, 410)
+      return
+    end
+
     raise ex
+  end
+
+  def unsubscribe
+    if current_user.blank?
+      cookies[:destination_url] = request.fullpath
+      return redirect_to "/login-preferences"
+    end
+
+    @topic_view = TopicView.new(params[:topic_id], current_user)
+
+    if slugs_do_not_match || (!request.format.json? && params[:slug].blank?)
+      return redirect_to @topic_view.topic.unsubscribe_url, status: 301
+    end
+
+    tu = TopicUser.find_by(user_id: current_user.id, topic_id: params[:topic_id])
+
+    if tu && tu.notification_level > TopicUser.notification_levels[:regular]
+      tu.notification_level = TopicUser.notification_levels[:regular]
+      tu.save!
+    else
+      TopicUser.change(current_user.id, params[:topic_id].to_i, notification_level: TopicUser.notification_levels[:muted])
+    end
+
+
+    perform_show_response
   end
 
   def wordpress
@@ -107,10 +162,10 @@ class TopicsController < ApplicationController
 
   def posts
     params.require(:topic_id)
-    params.require(:post_ids)
+    params.permit(:post_ids)
 
     @topic_view = TopicView.new(params[:topic_id], current_user, post_ids: params[:post_ids])
-    render_json_dump(TopicViewPostsSerializer.new(@topic_view, scope: guardian, root: false))
+    render_json_dump(TopicViewPostsSerializer.new(@topic_view, scope: guardian, root: false, include_raw: !!params[:include_raw]))
   end
 
   def destroy_timings
@@ -122,49 +177,50 @@ class TopicsController < ApplicationController
     topic = Topic.find_by(id: params[:topic_id])
     guardian.ensure_can_edit!(topic)
 
-    topic.title = params[:title] if params[:title].present?
-    topic.acting_user = current_user
+    changes = {}
+    PostRevisor.tracked_topic_fields.each_key do |f|
+      changes[f] = params[f] if params.has_key?(f)
+    end
 
-    success = false
-    Topic.transaction do
-      success = topic.save
-      success &= topic.change_category_to_id(params[:category_id].to_i) unless topic.private_message?
+    changes.delete(:title) if topic.title == changes[:title]
+    changes.delete(:category_id) if topic.category_id.to_i == changes[:category_id].to_i
+
+    success = true
+    if changes.length > 0
+      first_post = topic.ordered_posts.first
+      success = PostRevisor.new(first_post, topic).revise!(current_user, changes, validate_post: false)
     end
 
     # this is used to return the title to the client as it may have been changed by "TextCleaner"
     success ? render_serialized(topic, BasicTopicSerializer) : render_json_error(topic)
   end
 
-  def similar_to
-    params.require(:title)
-    params.require(:raw)
-    title, raw = params[:title], params[:raw]
-    [:title, :raw].each { |key| check_length_of(key, params[key]) }
+  def feature_stats
+    params.require(:category_id)
+    category_id = params[:category_id].to_i
 
-    # Only suggest similar topics if the site has a minimum amount of topics present.
-    topics = Topic.similar_to(title, raw, current_user).to_a if Topic.count_exceeds_minimum?
+    visible_topics = Topic.listable_topics.visible
 
-    render_serialized(topics, BasicTopicSerializer)
+    render json: {
+      pinned_in_category_count: visible_topics.where(category_id: category_id).where(pinned_globally: false).where.not(pinned_at: nil).count,
+      pinned_globally_count: visible_topics.where(pinned_globally: true).where.not(pinned_at: nil).count,
+      banner_count: Topic.listable_topics.where(archetype: Archetype.banner).count,
+    }
   end
 
   def status
     params.require(:status)
     params.require(:enabled)
-    status, topic_id  = params[:status], params[:topic_id].to_i
-    enabled = (params[:enabled] == 'true')
+    params.permit(:until)
+
+    status  = params[:status]
+    topic_id = params[:topic_id].to_i
+    enabled = params[:enabled] == 'true'
 
     check_for_status_presence(:status, status)
     @topic = Topic.find_by(id: topic_id)
     guardian.ensure_can_moderate!(@topic)
-    @topic.update_status(status, enabled, current_user)
-    render nothing: true
-  end
-
-  def star
-    @topic = Topic.find_by(id: params[:topic_id].to_i)
-    guardian.ensure_can_see!(@topic)
-
-    @topic.toggle_star(current_user, params[:starred] == 'true')
+    @topic.update_status(status, enabled, current_user, until: params[:until])
     render nothing: true
   end
 
@@ -177,12 +233,20 @@ class TopicsController < ApplicationController
   end
 
   def autoclose
-    raise Discourse::InvalidParameters.new(:auto_close_time) unless params.has_key?(:auto_close_time)
+    params.permit(:auto_close_time, :timezone_offset)
+    params.require(:auto_close_based_on_last_post)
+
     topic = Topic.find_by(id: params[:topic_id].to_i)
     guardian.ensure_can_moderate!(topic)
-    topic.set_auto_close(params[:auto_close_time], current_user)
+
+    topic.auto_close_based_on_last_post = params[:auto_close_based_on_last_post]
+    topic.set_auto_close(params[:auto_close_time], {by_user: current_user, timezone_offset: params[:timezone_offset] ? params[:timezone_offset].to_i : nil})
+
     if topic.save
-      render json: success_json.merge!(auto_close_at: topic.auto_close_at)
+      render json: success_json.merge!({
+        auto_close_at: topic.auto_close_at,
+        auto_close_hours: topic.auto_close_hours
+      })
     else
       render_json_error(topic)
     end
@@ -206,12 +270,79 @@ class TopicsController < ApplicationController
     render nothing: true
   end
 
+  def remove_bookmarks
+    topic = Topic.find(params[:topic_id].to_i)
+
+    PostAction.joins(:post)
+              .where(user_id: current_user.id)
+              .where('topic_id = ?', topic.id).each do |pa|
+
+      PostAction.remove_act(current_user, pa.post, PostActionType.types[:bookmark])
+    end
+
+    render nothing: true
+  end
+
+  def archive_message
+    toggle_archive_message(true)
+  end
+
+  def move_to_inbox
+    toggle_archive_message(false)
+  end
+
+  def toggle_archive_message(archive)
+    topic = Topic.find(params[:id].to_i)
+
+    group_id = nil
+
+    group_ids = current_user.groups.pluck(:id)
+    if group_ids.present?
+      allowed_groups = topic.allowed_groups
+                          .where('topic_allowed_groups.group_id IN (?)', group_ids).pluck(:id)
+      allowed_groups.each do |id|
+        if archive
+          GroupArchivedMessage.archive!(id, topic.id)
+          group_id = id
+        else
+          GroupArchivedMessage.move_to_inbox!(id, topic.id)
+        end
+      end
+    end
+
+    if topic.allowed_users.include?(current_user)
+      if archive
+        UserArchivedMessage.archive!(current_user.id, topic.id)
+      else
+        UserArchivedMessage.move_to_inbox!(current_user.id, topic.id)
+      end
+    end
+
+    if group_id
+      name = Group.find_by(id: group_id).try(:name)
+      render_json_dump(group_name: name)
+    else
+      render nothing: true
+    end
+  end
+
+  def bookmark
+    topic = Topic.find(params[:topic_id].to_i)
+    first_post = topic.ordered_posts.first
+
+    PostAction.act(current_user, first_post, PostActionType.types[:bookmark])
+
+    render nothing: true
+  end
+
   def destroy
     topic = Topic.find_by(id: params[:id])
     guardian.ensure_can_delete!(topic)
 
     first_post = topic.ordered_posts.first
-    PostDestroyer.new(current_user, first_post).destroy
+    PostDestroyer.new(current_user, first_post, { context: params[:context] }).destroy
+
+    DiscourseEvent.trigger(:topic_destroyed, topic, current_user)
 
     render nothing: true
   end
@@ -222,6 +353,8 @@ class TopicsController < ApplicationController
 
     first_post = topic.posts.with_deleted.order(:post_number).first
     PostDestroyer.new(current_user, first_post).recover
+
+    DiscourseEvent.trigger(:topic_recovered, topic, current_user)
 
     render nothing: true
   end
@@ -235,8 +368,35 @@ class TopicsController < ApplicationController
     topic = Topic.find_by(id: params[:topic_id])
     guardian.ensure_can_remove_allowed_users!(topic)
 
-    if topic.remove_allowed_user(params[:username])
+    if topic.remove_allowed_user(current_user, params[:username])
       render json: success_json
+    else
+      render json: failed_json, status: 422
+    end
+  end
+
+  def remove_allowed_group
+    params.require(:name)
+    topic = Topic.find_by(id: params[:topic_id])
+    guardian.ensure_can_remove_allowed_users!(topic)
+
+    if topic.remove_allowed_group(current_user, params[:name])
+      render json: success_json
+    else
+      render json: failed_json, status: 422
+    end
+  end
+
+  def invite_group
+    group = Group.find_by(name: params[:group])
+    raise Discourse::NotFound unless group
+
+    topic = Topic.find_by(id: params[:topic_id])
+
+    if topic.private_message?
+      guardian.ensure_can_send_private_message!(group)
+      topic.invite_group(current_user, group)
+      render_json_dump BasicGroupSerializer.new(group, scope: guardian, root: 'group')
     else
       render json: failed_json, status: 422
     end
@@ -250,15 +410,19 @@ class TopicsController < ApplicationController
     group_ids = Group.lookup_group_ids(params)
     guardian.ensure_can_invite_to!(topic,group_ids)
 
-    if topic.invite(current_user, username_or_email, group_ids)
-      user = User.find_by_username_or_email(username_or_email)
-      if user
-        render_json_dump BasicUserSerializer.new(user, scope: guardian, root: 'user')
+    begin
+      if topic.invite(current_user, username_or_email, group_ids, params[:custom_message])
+        user = User.find_by_username_or_email(username_or_email)
+        if user
+          render_json_dump BasicUserSerializer.new(user, scope: guardian, root: 'user')
+        else
+          render json: success_json
+        end
       else
-        render json: success_json
+        render json: failed_json, status: 422
       end
-    else
-      render json: failed_json, status: 422
+    rescue => e
+      render json: {errors: [e.message]}, status: 422
     end
   end
 
@@ -299,28 +463,31 @@ class TopicsController < ApplicationController
 
     guardian.ensure_can_change_post_owner!
 
-    topic = Topic.find(params[:topic_id].to_i)
-    new_user = User.find_by_username(params[:username])
-    ids = params[:post_ids].to_a
-
-    unless new_user && topic && ids
+    begin
+      PostOwnerChanger.new( post_ids: params[:post_ids].to_a,
+                            topic_id: params[:topic_id].to_i,
+                            new_owner: User.find_by(username: params[:username]),
+                            acting_user: current_user ).change_owner!
+      render json: success_json
+    rescue ArgumentError
       render json: failed_json, status: 422
-      return
     end
+  end
 
-    ActiveRecord::Base.transaction do
-      ids.each do |id|
-        post = Post.find(id)
-        if post.is_first_post?
-          topic.user = new_user # Update topic owner (first avatar)
-        end
-        post.set_owner(new_user, current_user)
-      end
+  def change_timestamps
+    params.require(:topic_id)
+    params.require(:timestamp)
+
+    guardian.ensure_can_change_post_owner!
+
+    begin
+      PostTimestampChanger.new( topic_id: params[:topic_id].to_i,
+                                timestamp: params[:timestamp].to_i ).change!
+
+      render json: success_json
+    rescue ActiveRecord::RecordInvalid
+      render json: failed_json, status: 422
     end
-
-    topic.update_statistics
-
-    render json: success_json
   end
 
   def clear_pin
@@ -342,7 +509,8 @@ class TopicsController < ApplicationController
       current_user,
       params[:topic_id].to_i,
       params[:topic_time].to_i,
-      (params[:timings] || []).map{|post_number, t| [post_number.to_i, t.to_i]}
+      (params[:timings] || []).map{|post_number, t| [post_number.to_i, t.to_i]},
+      {mobile: view_context.mobile_view?}
     )
     render nothing: true
   end
@@ -358,14 +526,16 @@ class TopicsController < ApplicationController
       topic_ids = params[:topic_ids].map {|t| t.to_i}
     elsif params[:filter] == 'unread'
       tq = TopicQuery.new(current_user)
-      topic_ids = TopicQuery.unread_filter(tq.joined_topic_user).listable_topics.pluck(:id)
+      topics = TopicQuery.unread_filter(tq.joined_topic_user).listable_topics
+      topics = topics.where('category_id = ?', params[:category_id]) if params[:category_id]
+      topic_ids = topics.pluck(:id)
     else
       raise ActionController::ParameterMissing.new(:topic_ids)
     end
 
     operation = params.require(:operation).symbolize_keys
     raise ActionController::ParameterMissing.new(:operation_type) if operation[:type].blank?
-    operator = TopicsBulkAction.new(current_user, topic_ids, operation)
+    operator = TopicsBulkAction.new(current_user, topic_ids, operation, group: operation[:group])
     changed_topic_ids = operator.perform!
     render_json_dump topic_ids: changed_topic_ids
   end
@@ -373,6 +543,22 @@ class TopicsController < ApplicationController
   def reset_new
     current_user.user_stat.update_column(:new_since, Time.now)
     render nothing: true
+  end
+
+  def convert_topic
+    params.require(:id)
+    params.require(:type)
+    topic = Topic.find_by(id: params[:id])
+    guardian.ensure_can_convert_topic!(topic)
+
+    if params[:type] == "public"
+      converted_topic = topic.convert_to_public_topic(current_user)
+    else
+      converted_topic = topic.convert_to_private_message(current_user)
+    end
+    render_topic_changes(converted_topic)
+  rescue ActiveRecord::RecordInvalid => ex
+    render_json_error(ex)
   end
 
   private
@@ -398,6 +584,9 @@ class TopicsController < ApplicationController
     url << "/#{post_number}" if post_number.to_i > 0
     url << ".json" if request.format.json?
 
+    page = params[:page]
+    url << "?page=#{page}" if page != 0
+
     redirect_to url, status: 301
   end
 
@@ -421,9 +610,7 @@ class TopicsController < ApplicationController
 
     Scheduler::Defer.later "Track Visit" do
       TopicViewItem.add(topic_id, ip, user_id)
-      if track_visit
-        TopicUser.track_visit! topic_id, user_id
-      end
+      TopicUser.track_visit!(topic_id, user_id) if track_visit
     end
 
   end
@@ -433,12 +620,13 @@ class TopicsController < ApplicationController
   end
 
   def perform_show_response
-    topic_view_serializer = TopicViewSerializer.new(@topic_view, scope: guardian, root: false)
+    topic_view_serializer = TopicViewSerializer.new(@topic_view, scope: guardian, root: false, include_raw: !!params[:include_raw])
 
     respond_to do |format|
       format.html do
         @description_meta = @topic_view.topic.excerpt
         store_preloaded("topic_#{@topic_view.topic.id}", MultiJson.dump(topic_view_serializer))
+        render :show
       end
 
       format.json do
@@ -464,13 +652,8 @@ class TopicsController < ApplicationController
     topic.move_posts(current_user, post_ids_including_replies, args)
   end
 
-  def check_length_of(key, attr)
-    str = (key == :raw) ? "body" : key.to_s
-    invalid_param(key) if attr.length < SiteSetting.send("min_#{str}_similar_length")
-  end
-
   def check_for_status_presence(key, attr)
-    invalid_param(key) unless %w(pinned_globally visible closed pinned archived).include?(attr)
+    invalid_param(key) unless %w(pinned pinned_globally visible closed archived).include?(attr)
   end
 
   def invalid_param(key)

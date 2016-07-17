@@ -1,10 +1,12 @@
 require_dependency 'gap_serializer'
 require_dependency 'post_serializer'
+require_dependency 'timeline_lookup'
 
 module PostStreamSerializerMixin
 
   def self.included(klass)
     klass.attributes :post_stream
+    klass.attributes :timeline_lookup
   end
 
   def post_stream
@@ -13,15 +15,17 @@ module PostStreamSerializerMixin
     result
   end
 
+  def timeline_lookup
+    TimelineLookup.build(object.filtered_post_stream)
+  end
+
   def posts
     return @posts if @posts.present?
     @posts = []
-    highest_number_in_posts = 0
     if object.posts
-      object.posts.each_with_index do |p, idx|
-        highest_number_in_posts = p.post_number if p.post_number > highest_number_in_posts
+      object.posts.each do |p|
         ps = PostSerializer.new(p, scope: scope, root: false)
-        ps.topic_slug = object.topic.slug
+        ps.add_raw = true if @options[:include_raw]
         ps.topic_view = object
         p.topic = object.topic
 

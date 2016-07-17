@@ -4,6 +4,7 @@ class TopicEmbed < ActiveRecord::Base
   belongs_to :topic
   belongs_to :post
   validates_presence_of :embed_url
+  validates_uniqueness_of :embed_url
 
   def self.normalize_url(url)
     url.downcase.sub(/\/$/, '').sub(/\-+/, '-').strip
@@ -20,6 +21,7 @@ class TopicEmbed < ActiveRecord::Base
     if SiteSetting.embed_truncate
       contents = first_paragraph_from(contents)
     end
+    contents ||= ''
     contents << imported_from_html(url)
 
     url = normalize_url(url)
@@ -31,12 +33,14 @@ class TopicEmbed < ActiveRecord::Base
     # If there is no embed, create a topic, post and the embed.
     if embed.blank?
       Topic.transaction do
+        eh = EmbeddableHost.record_for_host(url)
+
         creator = PostCreator.new(user,
                                   title: title,
                                   raw: absolutize_urls(url, contents),
                                   skip_validations: true,
                                   cook_method: Post.cook_methods[:raw_html],
-                                  category: SiteSetting.embed_category)
+                                  category: eh.try(:category_id))
         post = creator.create
         if post.present?
           TopicEmbed.create!(topic_id: post.topic_id,
@@ -50,8 +54,7 @@ class TopicEmbed < ActiveRecord::Base
       post = embed.post
       # Update the topic if it changed
       if post && post.topic && content_sha1 != embed.content_sha1
-        revisor = PostRevisor.new(post)
-        revisor.revise!(user, absolutize_urls(url, contents), skip_validations: true, bypass_rate_limiter: true)
+        post.revise(user, { raw: absolutize_urls(url, contents) }, skip_validations: true, bypass_rate_limiter: true)
         embed.update_column(:content_sha1, content_sha1)
       end
     end
@@ -62,16 +65,16 @@ class TopicEmbed < ActiveRecord::Base
   def self.find_remote(url)
     require 'ruby-readability'
 
-    url = normalize_url(url)
     original_uri = URI.parse(url)
     opts = {
       tags: %w[div p code pre h1 h2 h3 b em i strong a img ul li ol blockquote],
-      attributes: %w[href src],
+      attributes: %w[href src class],
       remove_empty_nodes: false
     }
 
     opts[:whitelist] = SiteSetting.embed_whitelist_selector if SiteSetting.embed_whitelist_selector.present?
     opts[:blacklist] = SiteSetting.embed_blacklist_selector if SiteSetting.embed_blacklist_selector.present?
+    embed_classname_whitelist = SiteSetting.embed_classname_whitelist if SiteSetting.embed_classname_whitelist.present?
 
     doc = Readability::Document.new(open(url).read, opts)
 
@@ -81,7 +84,7 @@ class TopicEmbed < ActiveRecord::Base
     doc.search(tags.keys.join(',')).each do |node|
       url_param = tags[node.name]
       src = node[url_param]
-      unless (src.empty?)
+      unless (src.nil? || src.empty?)
         begin
           uri = URI.parse(src)
           unless uri.host
@@ -91,6 +94,16 @@ class TopicEmbed < ActiveRecord::Base
           end
         rescue URI::InvalidURIError
           # If there is a mistyped URL, just do nothing
+        end
+      end
+      # only allow classes in the whitelist
+      allowed_classes = if embed_classname_whitelist.blank? then [] else embed_classname_whitelist.split(/[ ,]+/i) end
+      doc.search('[class]:not([class=""])').each do |classnode|
+        classes = classnode[:class].split(' ').select{ |classname| allowed_classes.include?(classname) }
+        if classes.length === 0
+          classnode.delete('class')
+        else
+          classnode[:class] = classes.join(' ')
         end
       end
     end
@@ -166,7 +179,7 @@ end
 #  id           :integer          not null, primary key
 #  topic_id     :integer          not null
 #  post_id      :integer          not null
-#  embed_url    :string(255)      not null
+#  embed_url    :string(1000)     not null
 #  content_sha1 :string(40)
 #  created_at   :datetime         not null
 #  updated_at   :datetime         not null

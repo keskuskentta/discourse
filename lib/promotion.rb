@@ -12,7 +12,7 @@ class Promotion
   # Returns true if the user was promoted, false otherwise.
   def review
     # nil users are never promoted
-    return false if @user.blank?
+    return false if @user.blank? || @user.trust_level_locked
 
     # Promotion beyond basic requires some expensive queries, so don't do that here.
     return false if @user.trust_level >= TrustLevel[2]
@@ -42,7 +42,7 @@ class Promotion
     old_level = @user.trust_level
     new_level = level
 
-    if new_level < old_level
+    if new_level < old_level && !@user.trust_level_locked
       next_up = new_level+1
       key = "tl#{next_up}_met?"
       if self.class.respond_to?(key) && self.class.send(key, @user)
@@ -83,6 +83,7 @@ class Promotion
     return false if stat.topics_entered < SiteSetting.tl2_requires_topics_entered
     return false if stat.posts_read_count < SiteSetting.tl2_requires_read_posts
     return false if (stat.time_read / 60) < SiteSetting.tl2_requires_time_spent_mins
+    return false if ((Time.now - user.created_at) / 60) < SiteSetting.tl2_requires_time_spent_mins
     return false if stat.days_visited < SiteSetting.tl2_requires_days_visited
     return false if stat.likes_received < SiteSetting.tl2_requires_likes_received
     return false if stat.likes_given < SiteSetting.tl2_requires_likes_given
@@ -96,6 +97,8 @@ class Promotion
     return false if stat.topics_entered < SiteSetting.tl1_requires_topics_entered
     return false if stat.posts_read_count < SiteSetting.tl1_requires_read_posts
     return false if (stat.time_read / 60) < SiteSetting.tl1_requires_time_spent_mins
+    return false if ((Time.now - user.created_at) / 60) < SiteSetting.tl1_requires_time_spent_mins
+
     return true
   end
 

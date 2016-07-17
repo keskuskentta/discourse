@@ -1,12 +1,12 @@
+require 'mysql2'
 require File.expand_path(File.dirname(__FILE__) + '/base.rb')
 
-require 'mysql2'
-require 'color'
 require 'htmlentities'
 require 'tsort'
 require 'set'
 require 'optparse'
 require 'etc'
+require 'open3'
 
 class ImportScripts::Smf2 < ImportScripts::Base
 
@@ -28,19 +28,21 @@ class ImportScripts::Smf2 < ImportScripts::Base
   attr_reader :options
 
   def initialize(options)
+    if options.timezone.nil?
+      $stderr.puts "No source timezone given and autodetection from PHP failed."
+      $stderr.puts "Use -t option to specify correct source timezone:"
+      $stderr.puts options.usage
+      exit 1
+    end
+
     super()
     @options = options
 
     begin
-      timezone = `php -i`.lines.each do |line|
-        key, *vals = line.split(' => ').map(&:strip)
-        break vals[0] if key == 'Default timezone'
-      end
-      Time.zone = timezone
-    rescue Errno::ENOENT
-      $stderr.puts "Cannot autodetect PHP timezone setting, php not found in $PATH"
+      Time.zone = options.timezone
     rescue ArgumentError
-      $stderr.puts "Cannot set timezone '#{timezone}' (from PHP)"
+      $stderr.puts "Timezone name '#{options.timezone}' is invalid."
+      exit 1
     end
 
     if options.database.blank?
@@ -58,15 +60,11 @@ class ImportScripts::Smf2 < ImportScripts::Base
   end
 
   def execute
-    authorized_extensions = SiteSetting.authorized_extensions
-    SiteSetting.authorized_extensions = "*"
     import_groups
     import_users
     import_categories
     import_posts
     postprocess_posts
-  ensure
-    SiteSetting.authorized_extensions = authorized_extensions
   end
 
   def import_groups
@@ -101,20 +99,25 @@ class ImportScripts::Smf2 < ImportScripts::Base
       LEFT JOIN {prefix}attachments AS b ON a.id_member = b.id_member
     SQL
       group_ids = [ member[:id_group], *member[:additional_groups].split(',').map(&:to_i) ]
+      create_time = Time.zone.at(member[:date_registered]) rescue Time.now
+      last_seen_time = Time.zone.at(member[:last_login]) rescue nil
+      ip_addr = IPAddr.new(member[:member_ip]) rescue nil
       {
         id: member[:id_member],
         username: member[:member_name],
-        created_at: Time.zone.at(member[:date_registered]),
+        created_at: create_time,
         name: member[:real_name],
         email: member[:email_address],
         active: member[:is_activated] == 1,
         approved: member[:is_activated] == 1,
-        last_seen_at: Time.zone.at(member[:last_login]),
+        last_seen_at: last_seen_time,
         date_of_birth: member[:birthdate],
-        ip_address: IPAddr.new(member[:member_ip]),
+        ip_address: ip_addr,
         admin: group_ids.include?(ADMIN_GROUP),
         moderator: group_ids.include?(MODERATORS_GROUP),
+
         post_create_action: proc do |user|
+          user.update(created_at: create_time) if create_time < user.created_at
           GroupUser.transaction do
             group_ids.each do |gid|
               group_id = group_id_from_imported_group_id(gid) and
@@ -142,7 +145,7 @@ class ImportScripts::Smf2 < ImportScripts::Base
       FROM {prefix}boards
       ORDER BY id_parent ASC, id_board ASC
     SQL
-      parent_id = category_from_imported_category_id(board[:id_parent]).id if board[:id_parent] > 0
+      parent_id = category_id_from_imported_category_id(board[:id_parent]) if board[:id_parent] > 0
       groups = (board[:member_groups] || "").split(/,/).map(&:to_i)
       restricted = !groups.include?(GUEST_GROUP) && !groups.include?(MEMBER_GROUP)
       {
@@ -254,7 +257,7 @@ class ImportScripts::Smf2 < ImportScripts::Base
         end
       }
       if message[:id_msg] == message[:id_first_msg]
-        post[:category] = category_from_imported_category_id(message[:id_board]).try(:name)
+        post[:category] = category_id_from_imported_category_id(message[:id_board])
         post[:title] = decode_entities(message[:subject])
       else
         parent = topic_lookup_from_imported_post_id(message[:id_first_msg])
@@ -421,7 +424,7 @@ class ImportScripts::Smf2 < ImportScripts::Base
         quote = "[quote=\"#{params['author']}"
         if QuoteParamsPattern =~ params['link']
           tl = topic_lookup_from_imported_post_id($~[:msg].to_i)
-          quote << ", post:#{tl[:post_number]}, topic:#{tl[:topic_id]}"
+          quote << ", post:#{tl[:post_number]}, topic:#{tl[:topic_id]}" if tl
         end
         quote << "\"]#{inner}[/quote]"
       else
@@ -445,7 +448,8 @@ class ImportScripts::Smf2 < ImportScripts::Base
   # param1=value1=still1 value1 param2=value2 ...
   # => {'param1' => 'value1=still1 value1', 'param2' => 'value2 ...'}
   def parse_tag_params(params)
-    params.to_s.strip.scan(/(?<param>\w+)=(?<value>(?:(?>\S+)|\s+(?!\w+=))*)/).to_h
+    params.to_s.strip.scan(/(?<param>\w+)=(?<value>(?:(?>\S+)|\s+(?!\w+=))*)/).
+      inject({}) {|h,e| h[e[0]] = e[1]; h }
   end
 
   class << self
@@ -514,6 +518,7 @@ class ImportScripts::Smf2 < ImportScripts::Base
       self.host ||= 'localhost'
       self.username ||= Etc.getlogin
       self.prefix ||= 'smf_'
+      self.timezone ||= get_php_timezone
     end
 
     def usage
@@ -526,8 +531,19 @@ class ImportScripts::Smf2 < ImportScripts::Base
     attr_accessor :database
     attr_accessor :prefix
     attr_accessor :smfroot
+    attr_accessor :timezone
 
     private
+
+    def get_php_timezone
+      phpinfo, status = Open3.capture2('phpnope', '-i')
+      phpinfo.lines.each do |line|
+        key, *vals = line.split(' => ').map(&:strip)
+        break vals[0] if key == 'Default timezone'
+      end
+    rescue Errno::ENOENT
+      $stderr.puts "Error: PHP CLI executable not found"
+    end
 
     def read_smf_settings
       settings = File.join(self.smfroot, 'Settings.php')
@@ -554,6 +570,7 @@ class ImportScripts::Smf2 < ImportScripts::Base
         o.on('-p [PASS]', :OPTIONAL, 'MySQL password. Without argument, reads password from STDIN.') {|s| self.password = s || :ask }
         o.on('-d DBNAME', :REQUIRED, 'Name of SMF database') {|s| self.database = s }
         o.on('-f PREFIX', :REQUIRED, "Table names prefix [\"#{self.prefix}\"]") {|s| self.prefix = s }
+        o.on('-t TIMEZONE', :REQUIRED, 'Timezone used by SMF2 [auto-detected from PHP]') {|s| self.timezone = s }
       end
     end
 
@@ -605,7 +622,7 @@ class ImportScripts::Smf2 < ImportScripts::Base
       end
 
       def quoted
-        @quoted.map {|id| @graph[id] }
+        @quoted.map {|id| @graph[id] }.reject(&:nil?)
       end
 
       def ignore_quotes?
@@ -633,7 +650,13 @@ class ImportScripts::Smf2 < ImportScripts::Base
       end
 
       def inspect
-        "#<#{self.class.name}: id=#{id.inspect}, prev=#{prev.try(:id).inspect}, quoted=#{quoted.map{|e|e.id}.inspect}>"
+        "#<#{self.class.name}: id=#{id.inspect}, prev=#{safe_id(@prev)}, quoted=[#{@quoted.map(&method(:safe_id)).join(', ')}]>"
+      end
+
+      private
+
+      def safe_id(id)
+        @graph[id].present? ? @graph[id].id.inspect : "(#{id})"
       end
     end #Node
 

@@ -32,6 +32,13 @@ Fabricator(:walter_white, from: :user) do
   password 'letscook'
 end
 
+Fabricator(:inactive_user, from: :user) do
+  name 'Inactive User'
+  username 'inactive_user'
+  email 'inactive@idontexist.com'
+  active false
+end
+
 Fabricator(:moderator, from: :user) do
   name { sequence(:name) {|i| "A#{i} Moderator"} }
   username { sequence(:username) {|i| "moderator#{i}"} }
@@ -78,4 +85,21 @@ Fabricator(:trust_level_4, from: :user) do
   username { sequence(:username) { |i| "tl4#{i}" } }
   email { sequence(:email) { |i| "tl4#{i}@elderfun.com" } }
   trust_level TrustLevel[4]
+end
+
+Fabricator(:anonymous, from: :user) do
+  name ''
+  username { sequence(:username) { |i| "anonymous#{i}" } }
+  email { sequence(:email) { |i| "anonymous#{i}@anonymous.com" } }
+  trust_level TrustLevel[1]
+  trust_level_locked true
+
+  after_create do |user|
+    user.custom_fields["master_id"] = 1
+    user.save!
+  end
+end
+
+Fabricator(:staged, from: :user) do
+  staged true
 end

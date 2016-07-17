@@ -32,7 +32,7 @@ class BadgeGranter
         user_badge = UserBadge.create!(badge: @badge,
                                        user: @user,
                                        granted_by: @granted_by,
-                                       granted_at: Time.now,
+                                       granted_at: @opts[:created_at] || Time.now,
                                        post_id: @post_id,
                                        seq: seq)
 
@@ -41,10 +41,19 @@ class BadgeGranter
         end
 
         if SiteSetting.enable_badges?
-          notification = @user.notifications.create(
-                  notification_type: Notification.types[:granted_badge],
-                  data: { badge_id: @badge.id, badge_name: @badge.name }.to_json)
-          user_badge.update_attributes notification_id: notification.id
+
+          unless @badge.badge_type_id == BadgeType::Bronze && user_badge.granted_at < 2.days.ago
+            I18n.with_locale(@user.effective_locale) do
+              notification = @user.notifications.create(
+                notification_type: Notification.types[:granted_badge],
+                data: { badge_id: @badge.id,
+                        badge_name: @badge.display_name,
+                        badge_slug: @badge.slug,
+                        username: @user.username}.to_json
+              )
+              user_badge.update_attributes notification_id: notification.id
+            end
+          end
         end
       end
     end
@@ -96,6 +105,12 @@ class BadgeGranter
         type: "PostAction",
         post_ids: [action.post_id, action.related_post_id].compact!
       }
+    when Badge::Trigger::PostProcessed
+      user = opt[:user]
+      payload = {
+        type: "PostProcessed",
+        user_ids: [user.id]
+      }
     end
 
     $redis.lpush queue_key, payload.to_json if payload
@@ -120,7 +135,9 @@ class BadgeGranter
       user_ids = list.map{|i| i["user_ids"]}.flatten.compact.uniq
 
       next unless post_ids.present? || user_ids.present?
-      find_by_type(type).each{|badge| backfill(badge, post_ids: post_ids, user_ids: user_ids)}
+      find_by_type(type).each{ |badge|
+        backfill(badge, post_ids: post_ids, user_ids: user_ids)
+      }
     end
   end
 
@@ -139,24 +156,24 @@ class BadgeGranter
   def self.contract_checks!(sql, opts = {})
     return unless sql.present?
     if Badge::Trigger.uses_post_ids?(opts[:trigger])
-      raise "Contract violation:\nQuery triggers on posts, but does not reference the ':post_ids' array" unless sql.match /:post_ids/
-      raise "Contract violation:\nQuery triggers on posts, but references the ':user_ids' array" if sql.match /:user_ids/
+      raise("Contract violation:\nQuery triggers on posts, but does not reference the ':post_ids' array") unless sql.match(/:post_ids/)
+      raise "Contract violation:\nQuery triggers on posts, but references the ':user_ids' array" if sql.match(/:user_ids/)
     end
     if Badge::Trigger.uses_user_ids?(opts[:trigger])
-      raise "Contract violation:\nQuery triggers on users, but does not reference the ':user_ids' array" unless sql.match /:user_ids/
-      raise "Contract violation:\nQuery triggers on users, but references the ':post_ids' array" if sql.match /:post_ids/
+      raise "Contract violation:\nQuery triggers on users, but does not reference the ':user_ids' array" unless sql.match(/:user_ids/)
+      raise "Contract violation:\nQuery triggers on users, but references the ':post_ids' array" if sql.match(/:post_ids/)
     end
     if opts[:trigger] && !Badge::Trigger.is_none?(opts[:trigger])
-      raise "Contract violation:\nQuery is triggered, but does not reference the ':backfill' parameter.\n(Hint: if :backfill is TRUE, you should ignore the :post_ids/:user_ids)" unless sql.match /:backfill/
+      raise "Contract violation:\nQuery is triggered, but does not reference the ':backfill' parameter.\n(Hint: if :backfill is TRUE, you should ignore the :post_ids/:user_ids)" unless sql.match(/:backfill/)
     end
 
     # TODO these three conditions have a lot of false negatives
     if opts[:target_posts]
-      raise "Contract violation:\nQuery targets posts, but does not return a 'post_id' column" unless sql.match /post_id/
+      raise "Contract violation:\nQuery targets posts, but does not return a 'post_id' column" unless sql.match(/post_id/)
     end
-    raise "Contract violation:\nQuery does not return a 'user_id' column" unless sql.match /user_id/
-    raise "Contract violation:\nQuery does not return a 'granted_at' column" unless sql.match /granted_at/
-    raise "Contract violation:\nQuery ends with a semicolon. Remove the semicolon; your sql will be used in a subquery." if sql.match /;\s*\z/
+    raise "Contract violation:\nQuery does not return a 'user_id' column" unless sql.match(/user_id/)
+    raise "Contract violation:\nQuery does not return a 'granted_at' column" unless sql.match(/granted_at/)
+    raise "Contract violation:\nQuery ends with a semicolon. Remove the semicolon; your sql will be used in a subquery." if sql.match(/;\s*\z/)
   end
 
   # Options:
@@ -190,7 +207,8 @@ class BadgeGranter
      end
 
     query_plan = nil
-    query_plan = ActiveRecord::Base.exec_sql("EXPLAIN #{sql}", params) if opts[:explain]
+    # HACK: active record is weird, force it to go down the sanitization path that cares not for % stuff
+    query_plan = ActiveRecord::Base.exec_sql("EXPLAIN #{sql} /*:backfill*/", params) if opts[:explain]
 
     sample = SqlBuilder.map_exec(OpenStruct, grants_sql, params).map(&:to_h)
 
@@ -250,7 +268,8 @@ class BadgeGranter
                         multiple_grant: true # cheat here, cause we only run on backfill and are deleting
                   ) if badge.auto_revoke && full_backfill
 
-    sql = "INSERT INTO user_badges(badge_id, user_id, granted_at, granted_by_id, post_id)
+    sql = " WITH w as (
+            INSERT INTO user_badges(badge_id, user_id, granted_at, granted_by_id, post_id)
             SELECT :id, q.user_id, q.granted_at, -1, #{post_id_field}
             FROM ( #{badge.query} ) q
             LEFT JOIN user_badges ub ON
@@ -258,6 +277,9 @@ class BadgeGranter
               #{post_clause}
             /*where*/
             RETURNING id, user_id, granted_at
+            )
+            select w.*, username FROM w
+            JOIN users u on u.id = w.user_id
             "
 
     builder = SqlBuilder.new(sql)
@@ -290,7 +312,12 @@ class BadgeGranter
       notification = Notification.create!(
                         user_id: row.user_id,
                         notification_type: Notification.types[:granted_badge],
-                        data: { badge_id: badge.id, badge_name: badge.name }.to_json )
+                        data: {
+                          badge_id: badge.id,
+                          badge_name: badge.name,
+                          badge_slug: badge.slug,
+                          username: row.username
+      }.to_json )
 
       Badge.exec_sql("UPDATE user_badges SET notification_id = :notification_id WHERE id = :id",
                       notification_id: notification.id,
@@ -299,7 +326,28 @@ class BadgeGranter
     end
 
     badge.reset_grant_count!
+  rescue => ex
+    Rails.logger.error("Failed to backfill '#{badge.name}' badge: #{opts}")
+    raise ex
+  end
 
+
+  def self.revoke_ungranted_titles!
+    Badge.exec_sql("UPDATE users SET title = ''
+                   WHERE NOT title IS NULL AND
+                         title <> '' AND
+                         EXISTS (
+                            SELECT 1
+                            FROM user_profiles
+                            WHERE user_id = users.id AND badge_granted_title
+                         ) AND
+                         title NOT IN (
+                            SELECT name
+                            FROM badges
+                            WHERE allow_title AND enabled AND
+                              badges.id IN (SELECT badge_id FROM user_badges ub where ub.user_id = users.id)
+                        )
+                   ")
   end
 
 end
