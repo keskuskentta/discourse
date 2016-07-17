@@ -1,5 +1,9 @@
 <div id='simple-container'>
-  <% if session["user_created_email"] %>
-    <span style="font-size: 16px; line-height: 24px;"><%= t('login.activate_email', email: session["user_created_email"]).html_safe %></span>
-  <% end %>
+  <span style="font-size: 16px; line-height: 24px;"><%= @message.html_safe %></span>
 </div>
+
+<%- content_for(:no_ember_head) do %>
+  <%= render_google_universal_analytics_code %>
+<%- end %>
+
+<%= render_google_analytics_code %>

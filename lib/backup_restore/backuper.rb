@@ -6,6 +6,7 @@ module BackupRestore
 
     def initialize(user_id, opts={})
       @user_id = user_id
+      @client_id = opts[:client_id]
       @publish_to_message_bus = opts[:publish_to_message_bus] || false
       @with_uploads = opts[:with_uploads].nil? ? true : opts[:with_uploads]
 
@@ -46,18 +47,23 @@ module BackupRestore
       create_archive
 
       after_create_hook
-
-      remove_old
     rescue SystemExit
       log "Backup process was cancelled!"
     rescue Exception => ex
       log "EXCEPTION: " + ex.message
       log ex.backtrace.join("\n")
+      @success = false
     else
       @success = true
       "#{@archive_basename}.tar.gz"
     ensure
-      notify_user rescue nil
+      begin
+        notify_user
+        remove_old
+      rescue => ex
+        Rails.logger.error("#{ex}\n" + ex.backtrace.join("\n"))
+      end
+
       clean_up
       @success ? log("[SUCCESS]") : log("[FAILED]")
     end
@@ -174,7 +180,7 @@ module BackupRestore
     def pg_dump_command
       db_conf = BackupRestore.database_configuration
 
-      password_argument = "PGPASSWORD=#{db_conf.password}" if db_conf.password.present?
+      password_argument = "PGPASSWORD='#{db_conf.password}'" if db_conf.password.present?
       host_argument     = "--host=#{db_conf.host}"         if db_conf.host.present?
       port_argument     = "--port=#{db_conf.port}"         if db_conf.port.present?
       username_argument = "--username=#{db_conf.username}" if db_conf.username.present?
@@ -238,14 +244,14 @@ module BackupRestore
       log "Creating empty archive..."
       `tar --create --file #{tar_filename} --files-from /dev/null`
 
-      log "Archiving metadata..."
-      FileUtils.cd(File.dirname(@meta_filename)) do
-        `tar --append --dereference --file #{tar_filename} #{File.basename(@meta_filename)}`
-      end
-
       log "Archiving data dump..."
       FileUtils.cd(File.dirname(@dump_filename)) do
         `tar --append --dereference --file #{tar_filename} #{File.basename(@dump_filename)}`
+      end
+
+      log "Archiving metadata..."
+      FileUtils.cd(File.dirname(@meta_filename)) do
+        `tar --append --dereference --file #{tar_filename} #{File.basename(@meta_filename)}`
       end
 
       if @with_uploads
@@ -257,12 +263,14 @@ module BackupRestore
         end
       end
 
-      log "Gzipping archive..."
-      `gzip --best #{tar_filename}`
+      remove_tmp_directory
+
+      log "Gzipping archive, this may take a while..."
+      `gzip -5 #{tar_filename}`
     end
 
     def after_create_hook
-      log "Executing the after_create_hook for the backup"
+      log "Executing the after_create_hook for the backup..."
       backup = Backup.create_from_filename("#{File.basename(@archive_basename)}.tar.gz")
       backup.after_create_hook
     end
@@ -283,11 +291,16 @@ module BackupRestore
 
     def clean_up
       log "Cleaning stuff up..."
-      remove_tmp_directory
+      remove_tar_leftovers
       unpause_sidekiq
       disable_readonly_mode if Discourse.readonly_mode?
       mark_backup_as_not_running
       log "Finished!"
+    end
+
+    def remove_tar_leftovers
+      log "Removing '.tar' leftovers..."
+      `rm -f #{@archive_directory}/*.tar`
     end
 
     def remove_tmp_directory
@@ -321,19 +334,20 @@ module BackupRestore
     end
 
     def log(message)
+      timestamp = Time.now.strftime("%Y-%m-%d %H:%M:%S")
       puts(message) rescue nil
-      publish_log(message) rescue nil
-      save_log(message)
+      publish_log(message, timestamp) rescue nil
+      save_log(message, timestamp)
     end
 
-    def publish_log(message)
+    def publish_log(message, timestamp)
       return unless @publish_to_message_bus
-      data = { timestamp: Time.now, operation: "backup", message: message }
-      MessageBus.publish(BackupRestore::LOGS_CHANNEL, data, user_ids: [@user_id])
+      data = { timestamp: timestamp, operation: "backup", message: message }
+      MessageBus.publish(BackupRestore::LOGS_CHANNEL, data, user_ids: [@user_id], client_ids: [@client_id])
     end
 
-    def save_log(message)
-      @logs << "[#{Time.now}] #{message}"
+    def save_log(message, timestamp)
+      @logs << "[#{timestamp}] #{message}"
     end
 
   end

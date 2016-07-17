@@ -66,8 +66,13 @@ class Auth::DefaultCurrentUserProvider
       user.auth_token = SecureRandom.hex(16)
       user.save!
     end
-    cookies.permanent[TOKEN_COOKIE] = { value: user.auth_token, httponly: true }
+    if SiteSetting.permanent_session_cookie
+      cookies.permanent[TOKEN_COOKIE] = { value: user.auth_token, httponly: true }
+    else
+      cookies[TOKEN_COOKIE] = { value: user.auth_token, httponly: true }
+    end
     make_developer_admin(user)
+    enable_bootstrap_mode(user)
     @env[CURRENT_USER_KEY] = user
   end
 
@@ -81,7 +86,22 @@ class Auth::DefaultCurrentUserProvider
     end
   end
 
+  def enable_bootstrap_mode(user)
+    Jobs.enqueue(:enable_bootstrap_mode, user_id: user.id) if user.admin && user.last_seen_at.nil? && !SiteSetting.bootstrap_mode_enabled && user.is_singular_admin?
+  end
+
   def log_off_user(session, cookies)
+    if SiteSetting.log_out_strict && (user = current_user)
+      user.auth_token = nil
+      user.save!
+
+      if user.admin && defined?(Rack::MiniProfiler)
+        # clear the profiling cookie to keep stuff tidy
+        cookies["__profilin"] = nil
+      end
+
+      user.logged_out
+    end
     cookies[TOKEN_COOKIE] = nil
   end
 
@@ -104,15 +124,18 @@ class Auth::DefaultCurrentUserProvider
   protected
 
   def lookup_api_user(api_key_value, request)
-    api_key = ApiKey.where(key: api_key_value).includes(:user).first
-    if api_key
+    if api_key = ApiKey.where(key: api_key_value).includes(:user).first
       api_username = request["api_username"]
+
+      if api_key.allowed_ips.present? && !api_key.allowed_ips.any? { |ip| ip.include?(request.ip) }
+        Rails.logger.warn("[Unauthorized API Access] username: #{api_username}, IP address: #{request.ip}")
+        return nil
+      end
+
       if api_key.user
         api_key.user if !api_username || (api_key.user.username_lower == api_username.downcase)
       elsif api_username
         User.find_by(username_lower: api_username.downcase)
-      else
-        nil
       end
     end
   end

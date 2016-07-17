@@ -1,14 +1,17 @@
 module BackupRestore
 
-  class RestoreDisabledError  < RuntimeError; end
+  class RestoreDisabledError < RuntimeError; end
   class FilenameMissingError < RuntimeError; end
 
   class Restorer
 
     attr_reader :success
 
-    def initialize(user_id, filename, publish_to_message_bus = false)
-      @user_id, @filename, @publish_to_message_bus = user_id, filename, publish_to_message_bus
+    def initialize(user_id, opts={})
+      @user_id = user_id
+      @client_id = opts[:client_id]
+      @filename = opts[:filename]
+      @publish_to_message_bus = opts[:publish_to_message_bus] || false
 
       ensure_restore_is_enabled
       ensure_no_operation_is_running
@@ -45,11 +48,10 @@ module BackupRestore
 
       switch_schema!
 
-      # TOFIX: MessageBus is busted...
-
       migrate_database
       reconnect_database
       reload_site_settings
+      clear_emoji_cache
 
       disable_readonly_mode
       ### READ-ONLY / END ###
@@ -73,7 +75,7 @@ module BackupRestore
     protected
 
     def ensure_restore_is_enabled
-      raise Restore::RestoreDisabledError unless Rails.env.development? || SiteSetting.allow_restore?
+      raise BackupRestore::RestoreDisabledError unless Rails.env.development? || SiteSetting.allow_restore?
     end
 
     def ensure_no_operation_is_running
@@ -88,7 +90,7 @@ module BackupRestore
     end
 
     def ensure_we_have_a_filename
-      raise Restore::FilenameMissingError if @filename.nil?
+      raise BackupRestore::FilenameMissingError if @filename.nil?
     end
 
     def initialize_state
@@ -155,17 +157,17 @@ module BackupRestore
     def copy_archive_to_tmp_directory
       log "Copying archive to tmp directory..."
       source = File.join(Backup.base_directory, @filename)
-      `cp #{source} #{@archive_filename}`
+      `cp '#{source}' '#{@archive_filename}'`
     end
 
     def unzip_archive
-      log "Unzipping archive..."
-      FileUtils.cd(@tmp_directory) { `gzip --decompress #{@archive_filename}` }
+      log "Unzipping archive, this may take a while..."
+      FileUtils.cd(@tmp_directory) { `gzip --decompress '#{@archive_filename}'` }
     end
 
     def extract_metadata
       log "Extracting metadata file..."
-      FileUtils.cd(@tmp_directory) { `tar --extract --file #{@tar_filename} #{BackupRestore::METADATA_FILE}` }
+      FileUtils.cd(@tmp_directory) { `tar --extract --file '#{@tar_filename}' #{BackupRestore::METADATA_FILE}` }
       @metadata = Oj.load_file(@meta_filename)
     end
 
@@ -180,7 +182,7 @@ module BackupRestore
 
     def extract_dump
       log "Extracting dump file..."
-      FileUtils.cd(@tmp_directory) { `tar --extract --file #{@tar_filename} #{BackupRestore::DUMP_FILE}` }
+      FileUtils.cd(@tmp_directory) { `tar --extract --file '#{@tar_filename}' #{BackupRestore::DUMP_FILE}` }
     end
 
     def restore_dump
@@ -236,7 +238,7 @@ module BackupRestore
     end
 
     def switch_schema!
-      log "Switching schemas..."
+      log "Switching schemas... try reloading the site in 5 minutes, if successful, then reboot and restore is complete."
 
       sql = [
         "BEGIN;",
@@ -254,6 +256,7 @@ module BackupRestore
       log "Migrating the database..."
       Discourse::Application.load_tasks
       ENV["VERSION"] = @current_version.to_s
+      User.exec_sql("SET search_path = public, pg_catalog;")
       Rake::Task["db:migrate"].invoke
     end
 
@@ -267,11 +270,16 @@ module BackupRestore
       SiteSetting.refresh!
     end
 
+    def clear_emoji_cache
+      log "Clearing emoji cache..."
+      Emoji.clear_cache
+    end
+
     def extract_uploads
-      log "Extracting uploads..."
-      if `tar --list --file #{@tar_filename} | grep 'uploads/'`.present?
+      if `tar --list --file '#{@tar_filename}' | grep 'uploads/'`.present?
+        log "Extracting uploads..."
         FileUtils.cd(File.join(Rails.root, "public")) do
-          `tar --extract --keep-newer-files --file #{@tar_filename} uploads/`
+          `tar --extract --keep-newer-files --file '#{@tar_filename}' uploads/`
         end
       end
     end
@@ -339,19 +347,20 @@ module BackupRestore
     end
 
     def log(message)
+      timestamp = Time.now.strftime("%Y-%m-%d %H:%M:%S")
       puts(message) rescue nil
-      publish_log(message) rescue nil
-      save_log(message)
+      publish_log(message, timestamp) rescue nil
+      save_log(message, timestamp)
     end
 
-    def publish_log(message)
+    def publish_log(message, timestamp)
       return unless @publish_to_message_bus
-      data = { timestamp: Time.now, operation: "restore", message: message }
-      MessageBus.publish(BackupRestore::LOGS_CHANNEL, data, user_ids: [@user_id])
+      data = { timestamp: timestamp, operation: "restore", message: message }
+      MessageBus.publish(BackupRestore::LOGS_CHANNEL, data, user_ids: [@user_id], client_ids: [@client_id])
     end
 
-    def save_log(message)
-      @logs << "[#{Time.now}] #{message}"
+    def save_log(message, timestamp)
+      @logs << "[#{timestamp}] #{message}"
     end
 
   end

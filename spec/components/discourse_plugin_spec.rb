@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 require_dependency 'discourse_plugin'
 
 describe DiscoursePlugin do
@@ -14,9 +14,13 @@ describe DiscoursePlugin do
   let(:registry) { mock }
   let(:plugin) { TestPlugin.new(registry) }
 
+  after do
+    DiscourseEvent.clear
+  end
+
   describe ".mixins" do
     it "finds its mixins" do
-      TestPlugin.mixins.should == [TestPlugin::TestMixin]
+      expect(TestPlugin.mixins).to eq([TestPlugin::TestMixin])
     end
   end
 

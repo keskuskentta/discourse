@@ -3,18 +3,30 @@ import DiscoveryController from 'discourse/controllers/discovery';
 export default DiscoveryController.extend({
   needs: ['modal', 'discovery'],
 
-  withLogo: Em.computed.filterBy('categories', 'logo_url'),
+  withLogo: Em.computed.filterBy('model.categories', 'logo_url'),
   showPostsColumn: Em.computed.empty('withLogo'),
 
-  actions: {
-    refresh: function() {
-      var self = this;
+  // this makes sure the composer isn't scoping to a specific category
+  category: null,
 
+  actions: {
+
+    refresh() {
       // Don't refresh if we're still loading
       if (this.get('controllers.discovery.loading')) { return; }
 
-      this.send('loading');
-      Discourse.CategoryList.list('categories').then(function(list) {
+      // If we `send('loading')` here, due to returning true it bubbles up to the
+      // router and ember throws an error due to missing `handlerInfos`.
+      // Lesson learned: Don't call `loading` yourself.
+      this.set('controllers.discovery.loading', true);
+
+      const CategoryList = require('discourse/models/category-list').default;
+      const parentCategory = this.get('model.parentCategory');
+      const promise = parentCategory ? CategoryList.listForParent(this.store, parentCategory) :
+                                       CategoryList.list(this.store);
+
+      const self = this;
+      promise.then(function(list) {
         self.set('model', list);
         self.send('loadingComplete');
       });
@@ -26,7 +38,7 @@ export default DiscoveryController.extend({
   }.property(),
 
   latestTopicOnly: function() {
-    return this.get('categories').find(function(c) { return c.get('featuredTopics.length') > 1; }) === undefined;
-  }.property('categories.@each.featuredTopics.length')
+    return this.get('model.categories').find(c => c.get('featuredTopics.length') > 1) === undefined;
+  }.property('model.categories.@each.featuredTopics.length')
 
 });
